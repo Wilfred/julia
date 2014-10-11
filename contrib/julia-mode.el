@@ -51,6 +51,7 @@
   (let ((table (make-syntax-table)))
     (modify-syntax-entry ?_ "w" table)   ; underscores in words
     (modify-syntax-entry ?@ "w" table)
+    (modify-syntax-entry ?! "w" table)
     (modify-syntax-entry ?# "< 14" table)  ; # single-line and multiline start
     (modify-syntax-entry ?= ". 23bn" table)
     (modify-syntax-entry ?\n ">" table)  ; \n single-line comment end
@@ -109,13 +110,13 @@
   (rx symbol-start "function"
       (1+ space)
       ;; Don't highlight module names in function declarations:
-      (* (seq (1+ (or word ?_)) "."))
+      (* (seq (1+ word) "."))
       ;; The function name itself
-      (group (1+ (or word ?_ ?!)))))
+      (group (1+ word))))
 
 (defconst julia-function-assignment-regex
   (rx line-start symbol-start
-      (group (1+ (or word ?_ ?!)))
+      (group (1+ word))
       (* space)
       (? "{" (* (not (any "}"))) "}")
       (* space)
@@ -124,19 +125,19 @@
       "="))
 
 (defconst julia-type-regex
-  (rx symbol-start (or "immutable" "type" "abstract") (1+ space) (group (1+ (or word ?_)))))
+  (rx symbol-start (or "immutable" "type" "abstract") (1+ space) (group (1+ word))))
 
 (defconst julia-type-annotation-regex
-  (rx "::" (group (1+ (or word ?_)))))
+  (rx "::" (group (1+ word))))
 
 ;;(defconst julia-type-parameter-regex
 ;;  (rx symbol-start (1+ (or word ?_)) "{" (group (1+ (or word ?_))) "}"))
 
 (defconst julia-subtype-regex
-  (rx "<:" (1+ space) (group (1+ (or word ?_))) (0+ space) (or "\n" "{" "end")))
+  (rx "<:" (1+ space) (group (1+ word)) (0+ space) (or "\n" "{" "end")))
 
 (defconst julia-macro-regex
-  (rx symbol-start (group  "@" (1+ (or word ?_ ?!)))))
+  (rx symbol-start (group  "@" (1+ word))))
 
 (defconst julia-keyword-regex
   (regexp-opt
