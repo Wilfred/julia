@@ -537,7 +537,7 @@ foobar(bar,
 baz)"
      "
 foobar(bar,
-       baz)"))
+    baz)"))
 
   (ert-deftest julia--test-indent-equals ()
     "We should increase indent on a trailing =."
