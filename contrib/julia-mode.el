@@ -286,100 +286,92 @@ a keyword if used as a field name, X.word, or quoted, :word."
        (or (not (equal (current-word t) "end"))
            (not (julia-in-brackets)))))
 
-;; if backward-sexp gives an error, move back 1 char to move over the '('
-(defun julia-safe-backward-sexp ()
-  (if (condition-case nil (backward-sexp) (error t))
-      (ignore-errors (backward-char))))
+(defun julia--unclosed-paren-line-p ()
+  "Return non-nil if the current line contains an unclosed paren.
+Ignores strings and comments.
 
-(defun julia-last-open-block-pos (min)
-  "Return the position of the last open block, if one found.
-Do not move back beyond position MIN."
+E.g. \"foo(\"."
   (save-excursion
-    (let ((count 0))
-      (while (not (or (> count 0) (<= (point) min)))
-        (julia-safe-backward-sexp)
-        (setq count
-              (cond ((julia-at-keyword julia-block-start-keywords)
-                     (+ count 1))
-                    ;; fixme: breaks on strings
-                    ((and (equal (current-word t) "end")
-                          (not (julia-in-comment)) (not (julia-in-brackets)))
-                     (- count 1))
-                    (t count))))
-      (if (> count 0)
-          (point)
-        nil))))
-
-(defun julia-last-open-block (min)
-  "Move back and return indentation level for last open block.
-Do not move back beyond MIN."
-  (let ((pos (julia-last-open-block-pos min)))
-    (and pos
-	 (progn
-	   (goto-char pos)
-	   (+ julia-basic-offset (current-indentation))))))
-
-(defsubst julia--safe-backward-char ()
-  "Move back one character, but don't error if we're at the
-beginning of the buffer."
-  (unless (eq (point) (point-min))
-    (backward-char)))
-
-(defun julia-paren-indent ()
-  "Return the column position of the innermost containing paren
-before point. Returns nil if we're not within nested parens."
-  (save-excursion
-    (let ((min-pos (or (julia-last-open-block-pos (point-min))
-                       (point-min)))
+    (let ((line-end-pos (progn (end-of-line) (point)))
           (open-count 0))
-      (while (and (> (point) min-pos)
-                  (not (plusp open-count)))
+      (beginning-of-line)
+      (while (and (<= (point) line-end-pos)
+                  (< (point) (point-max)))
+        (unless (or (julia-in-string) (julia-in-comment))
+          (cond ((looking-at (rx (any "[" "(")))
+                 (incf open-count))
+                ((looking-at (rx (any "]" ")")))
+                 (decf open-count))))
+        (forward-char 1))
+      (plusp open-count))))
 
-        (when (looking-at (rx (any "[" "]" "(" ")")))
-          (unless (or (julia-in-string) (julia-in-comment))
-            (cond ((looking-at (rx (any "[" "(")))
-                   (incf open-count))
-                  ((looking-at (rx (any "]" ")")))
-                   (decf open-count)))))
-
-        (julia--safe-backward-char))
-
-      (if (plusp open-count)
-          (+ (current-column) 2)
-        nil))))
+(defun julia--strict-backward-line ()
+  "Move backward by one line, or throw if we cannot."
+  (if (eq (line-number-at-pos) 1)
+      (throw 'beginning-of-file nil)
+    (forward-line -1)))
 
 (defun julia-indent-line ()
-  "Indent current line of julia code."
+  "Indent current line of julia code.
+Point is preserved at the current position within the line."
   (interactive)
-  (let* ((point-offset (- (current-column) (current-indentation))))
-    (end-of-line)
-    (indent-line-to
-     (or
-      ;; If we're inside an open paren, indent to line up arguments.
+  (let ((point-offset (- (current-column) (current-indentation)))
+        (start-pos (point))
+        (previous-line-indent nil)
+        ;; Default behaviour: indent the current line the same as the previous.
+        (action 'same-indent))
+
+    (catch 'beginning-of-file
       (save-excursion
+        ;; Find the first non-whitespace line before the current one.
+        (julia--strict-backward-line)
         (beginning-of-line)
-        (ignore-errors (julia-paren-indent)))
-      ;; If the previous line ends in =, increase the indent.
-      (ignore-errors ; if previous line is (point-min)
-        (save-excursion
-          (if (and (not (equal (point-min) (line-beginning-position)))
-                   (progn
-                     (forward-line -1)
-                     (end-of-line) (backward-char 1)
-                     (equal (char-after (point)) ?=)))
-              (+ julia-basic-offset (current-indentation))
-            nil)))
-      ;; Indent according to how many nested blocks we are in.
-      (save-excursion
-        (beginning-of-line)
-        (forward-to-indentation 0)
-        (let ((endtok (julia-at-keyword julia-block-end-keywords)))
-          (ignore-errors (+ (julia-last-open-block (point-min))
-                            (if endtok (- julia-basic-offset) 0)))))
-      ;; Otherwise, use the same indentation as previous line.
-      (save-excursion (forward-line -1)
-                      (current-indentation))
-      0))
+        (while (looking-at (rx (*? whitespace) "\n"))
+          (julia--strict-backward-line)
+          (beginning-of-line))
+
+        (setq previous-line-indent (current-indentation))
+
+        (cond
+         ;; If the previous line had an unclosed paren, increase indent.
+         ((julia--unclosed-paren-line-p)
+          (setq action 'increase-indent))
+
+         ;; If the previous line ended with =, increase indent.
+         ((looking-at (rx (* not-newline) "=" (* whitespace) "\n"))
+          (setq action 'increase-indent))
+
+         ;; If the previous line opened a block, increase indent.
+         ((save-excursion
+            (back-to-indentation)
+            (julia-at-keyword julia-block-start-keywords))
+          (setq action 'increase-indent))
+
+         ;; If the current line is closing a block, decrease indent.
+         ((progn
+            (goto-char start-pos)
+            (back-to-indentation)
+            (julia-at-keyword julia-block-end-keywords))
+          (setq action 'decrease-indent)))))
+
+    (unless (null previous-line-indent)
+
+      ;; Remove existing indentation.
+      (let ((line-start-pos (progn (beginning-of-line) (point))))
+        (back-to-indentation)
+        (while (> (point) line-start-pos)
+          (delete-char -1)))
+
+      ;; Apply correct indentation.
+      ;; TODO: allow toggling.
+      (cond
+       ((eq action 'increase-indent)
+        (indent-to (+ previous-line-indent julia-basic-offset)))
+       ((eq action 'same-indent)
+        (indent-to previous-line-indent))
+       ((eq action 'decrease-indent)
+        (indent-to (max (- previous-line-indent julia-basic-offset) 0)))))
+    
     ;; Point is now at the beginning of indentation, restore it
     ;; to its original position (relative to indentation).
     (when (>= point-offset 0)
