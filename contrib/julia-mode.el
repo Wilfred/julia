@@ -237,6 +237,11 @@ This function provides equivalent functionality, but makes no efforts to optimis
   (list "if" "while" "for" "begin" "try" "function" "type" "let" "macro"
 	"quote" "do" "immutable"))
 
+(defconst julia-block-middle-keywords
+  (list "else" "elseif" "catch" "finally")
+  "Keywords that terminate a block and start another one."
+  )
+
 (defconst julia-block-end-keywords
   (list "end" "else" "elseif" "catch" "finally"))
 
@@ -344,12 +349,14 @@ Point is preserved at the current position within the line."
          ;; If the previous line opened a block, increase indent.
          ((save-excursion
             (back-to-indentation)
-            (julia-at-keyword julia-block-start-keywords))
+            (or (julia-at-keyword julia-block-start-keywords)
+                (julia-at-keyword julia-block-middle-keywords)
+                (progn (end-of-line) (julia-at-keyword '("begin")))))
           (setq action 'increase-indent))
 
          ;; If the current line is closing a block, decrease indent.
          ((progn
-            (goto-char start-pos)
+            (goto-char start-pos) ;; go back to the current line
             (back-to-indentation)
             (julia-at-keyword julia-block-end-keywords))
           (setq action 'decrease-indent)))))
@@ -483,6 +490,22 @@ if foo
     bar
 end"))
 
+  (ert-deftest julia--test-indent-else ()
+    "We should indent inside else bodies."
+    (julia--should-indent
+     "
+if foo
+    bar
+else
+baz
+end"
+     "
+if foo
+    bar
+else
+    baz
+end"))
+
   (ert-deftest julia--test-indent-toplevel ()
     "We should not indent toplevel expressions. "
     (julia--should-indent
@@ -518,6 +541,18 @@ bar
 end"
      "
 function foo()
+    bar
+end"))
+
+  (ert-deftest julia--test-indent-begin ()
+    "We should indent after a begin keyword."
+    (julia--should-indent
+     "
+@async begin
+bar
+end"
+     "
+@async begin
     bar
 end"))
 
